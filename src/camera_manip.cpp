@@ -36,34 +36,13 @@ private:
         return out;
     }
 
-    // Compute and cache a fixed local tangent basis using the current center.
-    void computeFixedFrame()
-    {
-        // Up approximated as Z+ for local, or radial if sufficiently far.
-        osg::Vec3d up = (_center.length2() > 1000.0) ? normalizeOr(_center, osg::Vec3d(0.0, 0.0, 1.0))
-                                                     : osg::Vec3d(0.0, 0.0, 1.0);
-        const osg::Vec3d globalNorth(0.0, 0.0, 1.0);
-
-        osg::Vec3d east = globalNorth ^ up;
-        if (east.length2() <= kTinyEpsilon2)
-            east = osg::Vec3d(1.0, 0.0, 0.0) ^ up;
-        east.normalize();
-
-        osg::Vec3d north = up ^ east;
-        north = normalizeOr(north, globalNorth);
-
-        _fixedUp = up;
-        _fixedEast = east;
-        _fixedNorth = north;
-    }
-
     // Clamp distance to sane minimums.
     void clampDistance()
     {
         if (_distance < kMinDistance) _distance = kMinDistance;
     }
 
-    // Reset center/distance to scene bounds when available, and recompute frame.
+    // Reset center/distance to scene bounds when available, and compute fixed frame once.
     void resetFromBounds()
     {
         if (!_node.valid()) return;
@@ -71,7 +50,15 @@ private:
         if (!bs.valid()) return;
         _center = bs.center();
         _distance = std::max(100.0, bs.radius() * 2.5);
-        computeFixedFrame();
+
+        // One-time tangent frame derived from center (ECEF radial as Up).
+        _fixedUp = _center;
+        _fixedUp.normalize();
+        osg::Vec3d globalNorth(0.0, 0.0, 1.0);
+        _fixedEast = globalNorth ^ _fixedUp;
+        _fixedEast.normalize();
+        _fixedNorth = _fixedUp ^ _fixedEast;
+        _fixedNorth.normalize();
     }
 
 public:
