@@ -17,8 +17,9 @@ public:
     {
         if (_node.valid())
         {
-            _center = _node->getBound().center();
-            _distance = std::max(100.0, _node->getBound().radius() * 2.5);
+            const osg::BoundingSphere bs = _node->getBound();
+            _center = bs.center();
+            _distance = bs.radius() * 0.5;
         }
     }
 
