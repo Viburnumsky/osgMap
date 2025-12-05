@@ -10,8 +10,19 @@
 class GoogleMapsManipulator : public osgGA::CameraManipulator {
 public:
     GoogleMapsManipulator()
-        : _distance(100.0), _lastX(0), _lastY(0), _center(0, 0, 1)
-    {} // Non-zero center avoids a degenerate up/eye direction
+        : _distance(100.0), _lastX(0), _lastY(0), _center(0, 0, 1),
+          _isMoving(false), _lastMoveTime(0.0), _movementTimeout(0.2)
+    {}
+
+    // ---- NEW PUBLIC API ----
+    bool isMoving() const 
+    {
+        double now = osg::Timer::instance()->time_s();
+        return _isMoving && (now - _lastMoveTime < _movementTimeout);
+    }
+
+    void setMovementTimeout(double seconds) { _movementTimeout = seconds; }
+    // -------------------------
 
     void resetFromBounds()
     {
@@ -35,7 +46,6 @@ public:
         resetFromBounds();
     }
 
-    // Build the view matrix each frame: eye along the center direction at a given distance, global Z as up.
     osg::Matrixd getInverseMatrix() const override
     {
         osg::Vec3d eye = _center;
@@ -44,30 +54,34 @@ public:
         return osg::Matrixd::lookAt(eye, _center, osg::Vec3d(0, 0, 1));
     }
 
-    // Forward matrix required by the base class.
     osg::Matrixd getMatrix() const override
     {
         return osg::Matrixd::inverse(getInverseMatrix());
     }
 
-    // Unused matrix setters for this manipulator.
     void setByMatrix(const osg::Matrixd&) override {}
     void setByInverseMatrix(const osg::Matrixd&) override {}
 
     bool handle(const osgGA::GUIEventAdapter& ea,
                 osgGA::GUIActionAdapter& aa) override
     {
+        // Record movement helpers
+        auto markMovement = [&]() {
+            _isMoving = true;
+            _lastMoveTime = osg::Timer::instance()->time_s();
+        };
+
         if (ea.getEventType() == osgGA::GUIEventAdapter::PUSH)
         {
-            // Remember cursor position to compute drag deltas.
             _lastX = ea.getXnormalized();
             _lastY = ea.getYnormalized();
+            markMovement();
             return true;
         }
+
         if (ea.getEventType() == osgGA::GUIEventAdapter::DRAG
             && (ea.getButtonMask() & osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON))
         {
-            // Local tangent frame: up (center direction), east (global Z × up), north (up × east).
             osg::Vec3d up = _center;
             up.normalize();
             osg::Vec3d east = osg::Vec3d(0, 0, 1) ^ up;
@@ -79,25 +93,36 @@ public:
                 + (north * (y - _lastY) * _distance);
             _lastX = x;
             _lastY = y;
+
+            markMovement();
             aa.requestRedraw();
             return true;
         }
+
         if (ea.getEventType() == osgGA::GUIEventAdapter::SCROLL)
         {
-            // Zoom toward/away from the center.
             _distance *=
                 (ea.getScrollingMotion() == osgGA::GUIEventAdapter::SCROLL_UP
                      ? 0.8
                      : 1.25);
             _distance = std::max(_distance, 10.0);
+
+            markMovement();
             aa.requestRedraw();
             return true;
         }
+
         // Home key resets center/distance to node bounds.
-        return (ea.getEventType() == osgGA::GUIEventAdapter::KEYDOWN
-                && ea.getKey() == osgGA::GUIEventAdapter::KEY_Home)
-            ? (resetFromBounds(), aa.requestRedraw(), true)
-            : false;
+        if (ea.getEventType() == osgGA::GUIEventAdapter::KEYDOWN
+            && ea.getKey() == osgGA::GUIEventAdapter::KEY_Home)
+        {
+            resetFromBounds();
+            markMovement();
+            aa.requestRedraw();
+            return true;
+        }
+
+        return false;
     }
 
 private:
@@ -105,4 +130,10 @@ private:
     osg::Vec3d _center;
     double _distance;
     float _lastX, _lastY;
+
+    // ---- NEW FIELDS ----
+    bool _isMoving;
+    double _lastMoveTime;
+    double _movementTimeout;
+    // ---------------------
 };
