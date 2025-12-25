@@ -15,6 +15,7 @@
 #include <osg/Shader>
 #include <osg/Material>
 #include <osgSim/ShapeAttribute>
+#include <osg/Depth>
 
 #include <iostream>
 #include <vector>
@@ -27,42 +28,44 @@
 using namespace osg;
 
 static const char* vertSource = R"(
-    #version 120
+    #version 420 compatibility
     attribute vec3 a_tangent; 
-    varying vec2 v_texCoord;
-    varying vec3 v_lightDir;
-    varying vec3 v_viewDir;
+    out vec2 v_texCoord;
+    out vec3 v_normal;
+    out vec3 v_tangent;
+    out vec3 v_ecp;
 
     void main() {
         v_texCoord = gl_MultiTexCoord0.xy;
-        vec3 ecPos = vec3(gl_ModelViewMatrix * gl_Vertex);
-        
-        vec3 n = normalize(gl_NormalMatrix * gl_Normal);
-        vec3 t = normalize(gl_NormalMatrix * a_tangent);
-        vec3 b = cross(n, t);
-        mat3 tbn = mat3(t, b, n);
-
-        vec3 lightPos = gl_LightSource[0].position.xyz;
-        v_lightDir = (lightPos - ecPos) * tbn;
-        v_viewDir = -ecPos * tbn;
+        v_ecp = vec3(gl_ModelViewMatrix * gl_Vertex);
+        v_normal = gl_Normal;
+        v_tangent = a_tangent;
 
         gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
     }
 )";
 
 static const char* fragSource = R"(
-    #version 120
+    #version 420 compatibility
     uniform sampler2D diffuseMap;
     uniform sampler2D normalMap;
-    varying vec2 v_texCoord;
-    varying vec3 v_lightDir;
-    varying vec3 v_viewDir;
+    in vec2 v_texCoord;
+    in vec3 v_normal;
+    in vec3 v_tangent;
+    in vec3 v_ecp;
 
     void main() {
         vec4 texColor = texture2D(diffuseMap, v_texCoord);
         vec3 N = normalize(texture2D(normalMap, v_texCoord).rgb * 2.0 - 1.0);
-        vec3 L = normalize(v_lightDir);
-        vec3 V = normalize(v_viewDir);
+        vec3 n = normalize(gl_NormalMatrix * v_normal);
+        vec3 t = normalize(gl_NormalMatrix * v_tangent);
+        vec3 b = cross(n, t);
+        mat3 tbn = mat3(t, b, n);
+
+        N = normalize(tbn * N);     
+                                                                       
+        vec3 L = normalize(gl_LightSource[0].position.xyz);
+        vec3 V = normalize(-v_ecp);
         
         float NdotL = max(dot(N, L), 0.0);
         vec3 H = normalize(L + V);
@@ -70,7 +73,7 @@ static const char* fragSource = R"(
         
         vec3 ambient = gl_LightSource[0].ambient.rgb * texColor.rgb * 0.3;
         vec3 diffuse = gl_LightSource[0].diffuse.rgb * texColor.rgb * NdotL;
-        vec3 specular = gl_LightSource[0].specular.rgb * pow(NdotH, 32.0) * 0.2;
+        vec3 specular = gl_LightSource[0].specular.rgb * pow(NdotH, 64.0);
 
         gl_FragColor = vec4(ambient + diffuse + specular, texColor.a);
     }
@@ -85,15 +88,22 @@ inline std::string trim(const std::string& str)
     return str.substr(start, end - start + 1);
 }
 
-osg::StateSet* createTextureStateSet(osg::Program* program, const std::string& diffPath, const std::string& normPath)
+osg::StateSet* createTextureStateSet(osg::Program* program,
+                                     const std::string& diffPath,
+                                     const std::string& normPath, int order = 0)
 {
     osg::StateSet* ss = new osg::StateSet();
     ss->setAttributeAndModes(program, osg::StateAttribute::ON);
     ss->addUniform(new osg::Uniform("diffuseMap", 0));
     ss->addUniform(new osg::Uniform("normalMap", 1));
 
+    ss->setAttributeAndModes(new osg::Depth(osg::Depth::LESS, 0, 1, false));
+    ss->setRenderBinDetails(order, "RenderBin");
+    ss->setNestRenderBins(false);
+
     // wczyt tekstury
-    auto loadTexture = [](const std::string& path, bool isNormal) -> osg::Image* {
+    auto loadTexture = [](const std::string& path,
+                          bool isNormal) -> osg::Image* {
         osg::Image* img = osgDB::readImageFile(path);
         if (!img)
         {
@@ -104,9 +114,9 @@ osg::StateSet* createTextureStateSet(osg::Program* program, const std::string& d
             if (isNormal)
             {
                 unsigned char* d = img->data();
-                d[0] = 128; //x = 0
-                d[1] = 128; //y = 0
-                d[2] = 255; //z = 1
+                d[0] = 128; // x = 0
+                d[1] = 128; // y = 0
+                d[2] = 255; // z = 1
             }
             else
             {
@@ -123,21 +133,27 @@ osg::StateSet* createTextureStateSet(osg::Program* program, const std::string& d
         osg::Texture2D* tex = new osg::Texture2D(img);
         tex->setWrap(osg::Texture::WRAP_S, osg::Texture::REPEAT);
         tex->setWrap(osg::Texture::WRAP_T, osg::Texture::REPEAT);
-        tex->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR_MIPMAP_LINEAR);
+        tex->setFilter(osg::Texture::MIN_FILTER,
+                       osg::Texture::LINEAR_MIPMAP_LINEAR);
         tex->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
         tex->setMaxAnisotropy(8.0f);
         return tex;
     };
 
-    ss->setTextureAttributeAndModes(0, setupTexture(imgD), osg::StateAttribute::ON);
-    ss->setTextureAttributeAndModes(1, setupTexture(imgN), osg::StateAttribute::ON);
+    ss->setTextureAttributeAndModes(0, setupTexture(imgD),
+                                    osg::StateAttribute::ON);
+    ss->setTextureAttributeAndModes(1, setupTexture(imgN),
+                                    osg::StateAttribute::ON);
 
-    //ust charakterystyki swiatla
+    // ust charakterystyki swiatla
     osg::Material* mat = new osg::Material;
     mat->setColorMode(osg::Material::OFF);
-    mat->setAmbient(osg::Material::FRONT_AND_BACK, osg::Vec4(0.2, 0.2, 0.2, 1.0));
-    mat->setDiffuse(osg::Material::FRONT_AND_BACK, osg::Vec4(0.8, 0.8, 0.8, 1.0));
-    mat->setSpecular(osg::Material::FRONT_AND_BACK, osg::Vec4(0.4, 0.4, 0.4, 1.0));
+    mat->setAmbient(osg::Material::FRONT_AND_BACK,
+                    osg::Vec4(0.2, 0.2, 0.2, 1.0));
+    mat->setDiffuse(osg::Material::FRONT_AND_BACK,
+                    osg::Vec4(0.8, 0.8, 0.8, 1.0));
+    mat->setSpecular(osg::Material::FRONT_AND_BACK,
+                     osg::Vec4(0.15, 0.15, 0.15, 1.0));
     mat->setShininess(osg::Material::FRONT_AND_BACK, 32.0f);
 
     ss->setAttributeAndModes(mat, osg::StateAttribute::ON);
@@ -151,8 +167,10 @@ public:
     osg::ref_ptr<osg::StateSet> _cityState;
     osg::ref_ptr<osg::StateSet> _pathState;
 
-    RoadGeneratorVisitor(osg::StateSet* highway, osg::StateSet* city, osg::StateSet* path)
-        : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN), _highwayState(highway), _cityState(city), _pathState(path)
+    RoadGeneratorVisitor(osg::StateSet* highway, osg::StateSet* city,
+                         osg::StateSet* path)
+        : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN), _highwayState(highway),
+          _cityState(city), _pathState(path)
     {}
 
     // wydobywamy fclass z drawable
@@ -160,14 +178,16 @@ public:
     {
         if (!drawable) return "";
 
-        osgSim::ShapeAttributeList* sal = dynamic_cast<osgSim::ShapeAttributeList*>(drawable->getUserData());
+        osgSim::ShapeAttributeList* sal =
+            dynamic_cast<osgSim::ShapeAttributeList*>(drawable->getUserData());
 
         if (!sal) return "";
 
         for (unsigned int i = 0; i < sal->size(); ++i)
         {
             const osgSim::ShapeAttribute& attr = (*sal)[i];
-            if (attr.getName() == "fclass" && attr.getType() == osgSim::ShapeAttribute::STRING)
+            if (attr.getName() == "fclass"
+                && attr.getType() == osgSim::ShapeAttribute::STRING)
             {
                 const char* str = attr.getString();
                 return str ? trim(std::string(str)) : "";
@@ -179,26 +199,26 @@ public:
     inline float getWidthForFClass(const std::string& fclass)
     {
         if (fclass == "motorway" || fclass == "trunk") return 19.0f;
-        if (fclass == "motorway_link" || fclass == "trunk_link") return 12.0f;
-        if (fclass == "primary") return 14.0f;
-        if (fclass == "primary_link") return 11.0f;
-        if (fclass == "secondary") return 10.0f;
-        if (fclass == "secondary_link") return 9.0f;
-        if (fclass == "tertiary") return 8.0f;
-        if (fclass == "tertiary_link") return 7.0f;
-        if (fclass == "residential" || fclass == "living_street") return 7.0f;
-        if (fclass == "service") return 5.0f;
-        if (fclass == "unclassified") return 6.0f;
-        if (fclass == "path" || fclass == "footway" || fclass == "cycleway") return 2.5f;
-        if (fclass == "track") return 3.5f;
-        if (fclass == "steps") return 1.5f;
-        if (fclass == "pedestrian") return 4.0f;
-        return 6.0f;
+        if (fclass == "motorway_link" || fclass == "trunk_link") return 18.0f;
+        if (fclass == "primary") return 17.0f;
+        if (fclass == "secondary" || fclass == "primary_link") return 16.0f;
+        if (fclass == "secondary_link" || fclass == "tertiary") return 14.0f;
+        if (fclass == "residential" || fclass == "living_street"
+            || fclass == "tertiary_link")
+            return 13.0f;
+        if (fclass == "service" || fclass == "unclassified") return 11.0f;
+        if (fclass == "path" || fclass == "footway" || fclass == "cycleway")
+            return 11.5f;
+        if (fclass == "track" || fclass == "steps" || fclass == "pedestrian")
+            return 10.5f;
+        return 13.5f;
     }
 
     inline osg::StateSet* selectStateSetForWidth(float width)
     {
-        return (width >= 12.0f) ? _highwayState.get() : (width >= 6.0f)   ? _cityState.get() : _pathState.get();
+        return (width >= 18.0f) ? _highwayState.get()
+            : (width >= 12.0f)  ? _cityState.get()
+                                : _pathState.get();
     }
 
     void apply(osg::Geode& geode) override
@@ -217,7 +237,8 @@ public:
             if (lineGeom->getNumPrimitiveSets() == 0) continue;
 
             GLenum mode = lineGeom->getPrimitiveSet(0)->getMode();
-            if (mode != GL_LINE_STRIP && mode != GL_LINE_LOOP && mode != GL_LINES)
+            if (mode != GL_LINE_STRIP && mode != GL_LINE_LOOP
+                && mode != GL_LINES)
                 continue;
 
             std::string fclass = extractFClass(lineGeom);
@@ -250,7 +271,8 @@ public:
 
     osg::Geometry* createRoadMesh(osg::Geometry* line, float width)
     {
-        osg::Vec3Array* points = dynamic_cast<osg::Vec3Array*>(line->getVertexArray());
+        osg::Vec3Array* points =
+            dynamic_cast<osg::Vec3Array*>(line->getVertexArray());
         if (!points || points->size() < 2) return nullptr;
 
         const size_t numPoints = points->size();
@@ -273,7 +295,8 @@ public:
 
             if (i > 0)
             {
-                currentV += ((*points)[i] - (*points)[i - 1]).length() * 0.1f; // jak daleko od pocz drogi
+                currentV += ((*points)[i] - (*points)[i - 1]).length()
+                    * 0.1f; // jak daleko od pocz drogi
             }
 
             osg::Vec3 sideVector;
@@ -398,7 +421,8 @@ public:
         mesh->setTexCoordArray(0, texCoords, osg::Array::BIND_PER_VERTEX);
         mesh->setVertexAttribArray(6, tangents, osg::Array::BIND_PER_VERTEX);
 
-        mesh->addPrimitiveSet(new osg::DrawArrays(GL_TRIANGLES, 0, numVertices));
+        mesh->addPrimitiveSet(
+            new osg::DrawArrays(GL_TRIANGLES, 0, numVertices));
 
         // optymalizacja renderowania
         mesh->setDataVariance(osg::Object::STATIC);
@@ -417,7 +441,8 @@ osg::Node* process_roads(osg::Matrixd& ltw, const std::string& file_path)
     std::string roads_file_path = file_path + "/gis_osm_roads_free_1.shp";
 
     // load the data
-    osg::ref_ptr<osg::Node> roads_model = osgDB::readRefNodeFile(roads_file_path);
+    osg::ref_ptr<osg::Node> roads_model =
+        osgDB::readRefNodeFile(roads_file_path);
     if (!roads_model)
     {
         std::cout << "Cannot load file " << roads_file_path << std::endl;
@@ -438,12 +463,16 @@ osg::Node* process_roads(osg::Matrixd& ltw, const std::string& file_path)
     program->addBindAttribLocation("a_tangent", 6);
 
     // tekstury
-    std::string images_path = file_path + "/../data/images";
+    std::string images_path = "images";
 
     std::cout << "Laduje tekstury..." << std::endl;
-    osg::StateSet* ssHighway = createTextureStateSet(program, images_path + "/highway_d.png", images_path + "/highway_n.png");
-    osg::StateSet* ssCity = createTextureStateSet(program, images_path + "/city_d.png", images_path + "/city_n.png");
-    osg::StateSet* ssPath = createTextureStateSet(program, images_path + "/path_d.png", images_path + "/path_n.png");
+    osg::StateSet* ssHighway =
+        createTextureStateSet(program, images_path + "/highway_d.png",
+                              images_path + "/highway_n.png", -7);
+    osg::StateSet* ssCity = createTextureStateSet(
+        program, images_path + "/city_d.png", images_path + "/city_n.png", -8);
+    osg::StateSet* ssPath = createTextureStateSet(
+        program, images_path + "/path_d.png", images_path + "/path_n.png", -9);
 
     std::cout << "Generuje geometrie drog..." << std::endl;
     RoadGeneratorVisitor generator(ssHighway, ssCity, ssPath);
@@ -452,13 +481,13 @@ osg::Node* process_roads(osg::Matrixd& ltw, const std::string& file_path)
     // optymalizacja sceny
     osgUtil::Optimizer optimizer;
     optimizer.optimize(roads_model,
-        osgUtil::Optimizer::FLATTEN_STATIC_TRANSFORMS
-            | osgUtil::Optimizer::REMOVE_REDUNDANT_NODES
-            | osgUtil::Optimizer::MERGE_GEOMETRY
-            | osgUtil::Optimizer::SPATIALIZE_GROUPS
-            | osgUtil::Optimizer::INDEX_MESH 
-            | osgUtil::Optimizer::VERTEX_PRETRANSFORM
-            | osgUtil::Optimizer::VERTEX_POSTTRANSFORM);
+                       osgUtil::Optimizer::FLATTEN_STATIC_TRANSFORMS
+                           | osgUtil::Optimizer::REMOVE_REDUNDANT_NODES
+                           | osgUtil::Optimizer::MERGE_GEOMETRY
+                           | osgUtil::Optimizer::SPATIALIZE_GROUPS
+                           | osgUtil::Optimizer::INDEX_MESH
+                           | osgUtil::Optimizer::VERTEX_PRETRANSFORM
+                           | osgUtil::Optimizer::VERTEX_POSTTRANSFORM);
 
     std::cout << "Przetwarzanie zakonczone\n" << std::endl;
 
