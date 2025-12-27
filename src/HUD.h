@@ -17,9 +17,12 @@
 #include <unordered_map>
 
 static osg::ref_ptr<osgText::Text> g_hudText;
+extern osg::ref_ptr<osg::Uniform> g_hudAlpha;
+extern float g_targetAlpha;
+extern float g_currentAlpha;
+
 osg::Camera* createHUD(const std::string& logoFile, float scale = 0.3f,
-                       int winWidth = 1920,
-                       int winHeight = 1080);
+                       int winWidth = 1920, int winHeight = 1080);
 void hudSetText(const std::string& text);
 std::string getLandInfoAtIntersection(osg::Node* sceneRoot,
                                       const osg::Vec3d& hitPoint);
@@ -30,14 +33,14 @@ const std::unordered_map<std::string, std::string> fclassPL = {
     { "primary_link", "droga główna łącząca" },
     { "secondary", "droga drugorzędna" },
     { "secondary_link", "droga drugorzędna łącząca" },
-    { "tertiary", "droga lokalna" }, 
-    { "tertiary_link", "droga lokalna łącząca" }, 
+    { "tertiary", "droga lokalna" },
+    { "tertiary_link", "droga lokalna łącząca" },
     { "motorway", "autostrada" },
     { "motorway_link", "autostrada - połączenie" },
     { "footway", "chodnik" },
     { "nature_reserve", "rezerwat" },
     { "commercial", u8"przedsiębiorstwo" },
-    { "forest", "las"},
+    { "forest", "las" },
     { "reservoir", "zbiornik" },
     { "wetland", "mokradło" },
     { "riverbank", "brzeg rzeki" },
@@ -156,3 +159,4 @@ private:
     float _scale;
 };
 #endif
+
