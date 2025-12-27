@@ -240,6 +240,11 @@ int main(int argc, char** argv)
     viewer->setLightingMode(osg::View::LightingMode::SKY_LIGHT);
     viewer->getLight()->setPosition(
         osg::Vec4(wtrans[0], wtrans[1], wtrans[2], 0.f));
+    viewer->getLight()->setDirection(
+        osg::Vec3(wtrans[0], wtrans[1], wtrans[2]));
+    viewer->getLight()->setAmbient(osg::Vec4(0.2f, 0.2f, 0.2f, 1.0f));
+    viewer->getLight()->setDiffuse(osg::Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+    viewer->getLight()->setSpecular(osg::Vec4(0.5f, 0.5f, 0.5f, 1.0f));
 
 
     // any option left unread are converted into errors to write out later.
@@ -267,7 +272,8 @@ int main(int argc, char** argv)
     int h = viewer->getCamera()->getViewport()->height();
 
     // 5. Create HUD
-    osg::Camera* hud = createHUD("images/logo.png", 0.3f, w, h); // or scaling version
+    osg::Camera* hud =
+        createHUD("images/logo.png", 0.3f, w, h); // or scaling version
 
     // 6. Add HUD AFTER realize() (totally allowed)
     finalRoot->addChild(hud);
