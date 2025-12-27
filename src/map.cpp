@@ -29,9 +29,12 @@
 #include "HUD.h"
 #include "camera_manip.cpp"
 using namespace osg;
+float g_targetAlpha = 0.0f;
+float g_currentAlpha = 0.0f;
 
 osg::ref_ptr<osgViewer::Viewer> viewer;
 osg::ref_ptr<osg::EllipsoidModel> ellipsoid;
+
 
 
 int main(int argc, char** argv)
@@ -285,37 +288,109 @@ int main(int argc, char** argv)
     finalRoot->addChild(hud);
 
 
+   // 7. Main loop
     // 7. Main loop
     bool wasMoving = false;
+    const float FADE_SPEED = 2.0f;
+
+    // Initialize to visible
+    g_currentAlpha = 1.0f;
+    g_targetAlpha = 1.0f;
+
+    // Set initial alpha values
+    if (g_hudAlpha.valid())
+    {
+        g_hudAlpha->set(g_currentAlpha);
+    }
+    if (g_hudText.valid())
+    {
+        g_hudText->setColor(osg::Vec4(1, 1, 1, g_currentAlpha));
+        g_hudText->setBackdropColor(osg::Vec4(0, 0, 0, g_currentAlpha));
+    }
+
+    double lastTime = viewer->getFrameStamp()->getReferenceTime();
+
     while (!viewer->done())
     {
-        viewer->frame();
+        double frameTime = viewer->getFrameStamp()->getReferenceTime();
+        float deltaTime = frameTime - lastTime;
+        lastTime = frameTime;
 
         auto* keySwitch = dynamic_cast<osgGA::KeySwitchMatrixManipulator*>(
             viewer->getCameraManipulator());
 
-        if (!keySwitch) continue;
-
-        osgGA::CameraManipulator* current =
-            keySwitch->getCurrentMatrixManipulator();
-
-        if (auto* google = dynamic_cast<GoogleMapsManipulator*>(current))
+        if (keySwitch)
         {
-            bool moving = google->isMoving();
+            osgGA::CameraManipulator* current =
+                keySwitch->getCurrentMatrixManipulator();
 
-            if (!moving && wasMoving)
+            if (auto* google = dynamic_cast<GoogleMapsManipulator*>(current))
             {
-                std::ostringstream ss;
+                bool moving = google->isMoving();
 
-                osg::Vec3d hit, normal;
-                std::string landInfo =
-                    getLandInfoAtIntersection(finalRoot, hit);
-                ss << "Land Data:\n" << landInfo;
-                hudSetText(ss.str());
+                // Update target alpha based on movement
+                if (moving)
+                {
+                    g_targetAlpha = 0.0f; // Fade out when moving
+                }
+                else
+                {
+                    g_targetAlpha = 1.0f; // Fade in when stopped
+
+                    // When just stopped moving, update text content
+                    if (wasMoving)
+                    {
+                        std::ostringstream ss;
+                        osg::Vec3d hit, normal;
+                        std::string landInfo =
+                            getLandInfoAtIntersection(finalRoot, hit);
+                        ss << "Land Data:\n" << landInfo;
+                        hudSetText(ss.str());
+                    }
+                }
+
+                wasMoving = moving;
             }
-            // Update the "previous state"
-            wasMoving = moving;
         }
+
+        // ALWAYS smoothly interpolate current alpha toward target (runs every
+        // frame)
+        float diff = g_targetAlpha - g_currentAlpha;
+        if (std::abs(diff) > 0.001f)
+        {
+            float step = FADE_SPEED * deltaTime;
+
+            if (std::abs(diff) < step)
+            {
+                g_currentAlpha = g_targetAlpha;
+            }
+            else
+            {
+                g_currentAlpha += (diff > 0 ? step : -step);
+            }
+
+            // Clamp to valid range
+            g_currentAlpha = std::max(0.0f, std::min(1.0f, g_currentAlpha));
+        }
+
+        // ALWAYS update alpha every frame for smooth animation
+        if (g_hudAlpha.valid())
+        {
+            g_hudAlpha->set(g_currentAlpha);
+        }
+
+        if (g_hudText.valid())
+        {
+            osg::Vec4 c = g_hudText->getColor();
+            c.a() = g_currentAlpha;
+            g_hudText->setColor(c);
+
+            osg::Vec4 bc = g_hudText->getBackdropColor();
+            bc.a() = g_currentAlpha;
+            g_hudText->setBackdropColor(bc);
+        }
+
+        viewer->frame();
     }
 
     return 0;
