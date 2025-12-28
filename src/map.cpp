@@ -287,9 +287,7 @@ int main(int argc, char** argv)
     // 6. Add HUD AFTER realize() (totally allowed)
     finalRoot->addChild(hud);
 
-
    // 7. Main loop
-    // 7. Main loop
     bool wasMoving = false;
     const float FADE_SPEED = 2.0f;
 
@@ -301,11 +299,6 @@ int main(int argc, char** argv)
     if (g_hudAlpha.valid())
     {
         g_hudAlpha->set(g_currentAlpha);
-    }
-    if (g_hudText.valid())
-    {
-        g_hudText->setColor(osg::Vec4(1, 1, 1, g_currentAlpha));
-        g_hudText->setBackdropColor(osg::Vec4(0, 0, 0, g_currentAlpha));
     }
 
     double lastTime = viewer->getFrameStamp()->getReferenceTime();
@@ -377,17 +370,6 @@ int main(int argc, char** argv)
         if (g_hudAlpha.valid())
         {
             g_hudAlpha->set(g_currentAlpha);
-        }
-
-        if (g_hudText.valid())
-        {
-            osg::Vec4 c = g_hudText->getColor();
-            c.a() = g_currentAlpha;
-            g_hudText->setColor(c);
-
-            osg::Vec4 bc = g_hudText->getBackdropColor();
-            bc.a() = g_currentAlpha;
-            g_hudText->setBackdropColor(bc);
         }
 
         viewer->frame();
