@@ -21,6 +21,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <unordered_map>
 #include <cmath>
 
 #include "common.h"
@@ -198,20 +199,26 @@ public:
 
     inline float getWidthForFClass(const std::string& fclass)
     {
-        if (fclass == "motorway" || fclass == "trunk") return 19.0f;
-        if (fclass == "motorway_link" || fclass == "trunk_link") return 18.0f;
-        if (fclass == "primary") return 17.0f;
-        if (fclass == "secondary" || fclass == "primary_link") return 16.0f;
-        if (fclass == "secondary_link" || fclass == "tertiary") return 14.0f;
-        if (fclass == "residential" || fclass == "living_street"
+        static std::unordered_map<std::string, float> mapping;
+        auto it=mapping.find(fclass);
+        if(it!=mapping.end())
+            return it->second;
+        float width=13.5f;
+        if (fclass == "motorway" || fclass == "trunk") width= 19.0f;
+        else if (fclass == "motorway_link" || fclass == "trunk_link") width= 18.0f;
+        else if (fclass == "primary") width= 17.0f;
+        else if (fclass == "secondary" || fclass == "primary_link") width= 16.0f;
+        else if (fclass == "secondary_link" || fclass == "tertiary") width= 14.0f;
+        else if (fclass == "residential" || fclass == "living_street"
             || fclass == "tertiary_link")
-            return 13.0f;
-        if (fclass == "service" || fclass == "unclassified") return 11.0f;
-        if (fclass == "path" || fclass == "footway" || fclass == "cycleway")
-            return 11.5f;
-        if (fclass == "track" || fclass == "steps" || fclass == "pedestrian")
-            return 10.5f;
-        return 13.5f;
+            width= 13.0f;
+        else if (fclass == "service" || fclass == "unclassified") width= 11.0f;
+        else if (fclass == "path" || fclass == "footway" || fclass == "cycleway")
+            width= 11.5f;
+        else if (fclass == "track" || fclass == "steps" || fclass == "pedestrian")
+            width= 10.5f;
+        mapping[fclass]=width;
+        return width;
     }
 
     inline osg::StateSet* selectStateSetForWidth(float width)
@@ -223,12 +230,11 @@ public:
 
     void apply(osg::Geode& geode) override
     {
-        std::vector<osg::Drawable*> toRemove;
-        std::vector<osg::Drawable*> toAdd;
+        static std::vector<osg::Drawable*> toRemove;
+        static std::vector<osg::Drawable*> toAdd;
 
-        // rezerwacja pamieci
-        toRemove.reserve(geode.getNumDrawables());
-        toAdd.reserve(geode.getNumDrawables());
+        toRemove.clear();
+        toAdd.clear();
 
         for (unsigned int i = 0; i < geode.getNumDrawables(); ++i)
         {
@@ -256,8 +262,8 @@ public:
             }
         }
 
-        for (auto d : toRemove) geode.removeDrawable(d);
-        for (auto d : toAdd) geode.addDrawable(d);
+        for (auto && d : toRemove) geode.removeDrawable(d);
+        for (auto && d : toAdd) geode.addDrawable(d);
 
         traverse(geode);
     }
@@ -281,8 +287,8 @@ public:
         const osg::Vec3 up(0, 0, 1);
 
         // rezerwacja pamieci
-        std::vector<RoadProfile> profiles;
-        profiles.reserve(numPoints);
+        static std::vector<RoadProfile> profiles;
+        profiles.clear();
 
         // wierzcholki
         float currentV = 0.0f;
@@ -361,68 +367,51 @@ public:
             profiles.push_back(prof);
         }
 
-
         const size_t numSegments = numPoints - 1;
-        const size_t numVertices = numSegments * 6; // 2 trojkaty po 3 wierzch
+        const size_t numVertices = numSegments * 2 + 2; // 2 trojkaty po 3 wierzch
 
         osg::Vec3Array* vertices = new osg::Vec3Array(numVertices);
-        osg::Vec3Array* normals = new osg::Vec3Array(numVertices);
+        osg::Vec3Array* normals = new osg::Vec3Array(1);
         osg::Vec2Array* texCoords = new osg::Vec2Array(numVertices);
         osg::Vec3Array* tangents = new osg::Vec3Array(numVertices);
 
-        size_t idx = 0;
-        for (size_t i = 0; i < numSegments; ++i)
+        (*normals)[0] = up;
+
+        (*vertices)[0] = profiles[0].left;
+        (*vertices)[1] = profiles[0].right;
+
+        (*tangents)[0] = profiles[0].tangent;
+        (*tangents)[1] = profiles[0].tangent;
+
+        (*texCoords)[0] = osg::Vec2(0.0f, profiles[0].vCoord);
+        (*texCoords)[1] = osg::Vec2(1.0f, profiles[0].vCoord);
+
+        size_t idx = 2;
+        for (size_t i = 1; i <= numSegments; ++i)
         {
             const RoadProfile& p0 = profiles[i];
-            const RoadProfile& p1 = profiles[i + 1];
 
             // trojkat 1: L0, R0, L1
-            (*vertices)[idx] = p0.left;
+            (*vertices)[idx + 0] = p0.left;
             (*vertices)[idx + 1] = p0.right;
-            (*vertices)[idx + 2] = p1.left;
 
-            (*normals)[idx] = up;
-            (*normals)[idx + 1] = up;
-            (*normals)[idx + 2] = up;
-
-            (*tangents)[idx] = p0.tangent;
+            (*tangents)[idx + 0] = p0.tangent;
             (*tangents)[idx + 1] = p0.tangent;
-            (*tangents)[idx + 2] = p1.tangent;
 
-            (*texCoords)[idx] = osg::Vec2(0.0f, p0.vCoord);
+            (*texCoords)[idx + 0] = osg::Vec2(0.0f, p0.vCoord);
             (*texCoords)[idx + 1] = osg::Vec2(1.0f, p0.vCoord);
-            (*texCoords)[idx + 2] = osg::Vec2(0.0f, p1.vCoord);
 
-            idx += 3;
-
-            // trojkat 2: R0, R1, L1
-            (*vertices)[idx] = p0.right;
-            (*vertices)[idx + 1] = p1.right;
-            (*vertices)[idx + 2] = p1.left;
-
-            (*normals)[idx] = up;
-            (*normals)[idx + 1] = up;
-            (*normals)[idx + 2] = up;
-
-            (*tangents)[idx] = p0.tangent;
-            (*tangents)[idx + 1] = p1.tangent;
-            (*tangents)[idx + 2] = p1.tangent;
-
-            (*texCoords)[idx] = osg::Vec2(1.0f, p0.vCoord);
-            (*texCoords)[idx + 1] = osg::Vec2(1.0f, p1.vCoord);
-            (*texCoords)[idx + 2] = osg::Vec2(0.0f, p1.vCoord);
-
-            idx += 3;
+            idx += 2;
         }
 
         osg::Geometry* mesh = new osg::Geometry();
         mesh->setVertexArray(vertices);
-        mesh->setNormalArray(normals, osg::Array::BIND_PER_VERTEX);
+        mesh->setNormalArray(normals, osg::Array::BIND_OVERALL);
         mesh->setTexCoordArray(0, texCoords, osg::Array::BIND_PER_VERTEX);
         mesh->setVertexAttribArray(6, tangents, osg::Array::BIND_PER_VERTEX);
 
         mesh->addPrimitiveSet(
-            new osg::DrawArrays(GL_TRIANGLES, 0, numVertices));
+            new osg::DrawArrays(GL_TRIANGLE_STRIP, 0, numVertices));
 
         // optymalizacja renderowania
         mesh->setDataVariance(osg::Object::STATIC);
@@ -467,12 +456,12 @@ osg::Node* process_roads(osg::Matrixd& ltw, const std::string& file_path)
 
     std::cout << "Laduje tekstury..." << std::endl;
     osg::StateSet* ssHighway =
-        createTextureStateSet(program, images_path + "/highway_d.png",
-                              images_path + "/highway_n.png", -7);
+        createTextureStateSet(program, images_path + "/highway_d.dds",
+                              images_path + "/highway_n.dds", -7);
     osg::StateSet* ssCity = createTextureStateSet(
-        program, images_path + "/city_d.png", images_path + "/city_n.png", -8);
+        program, images_path + "/city_d.dds", images_path + "/city_n.dds", -8);
     osg::StateSet* ssPath = createTextureStateSet(
-        program, images_path + "/path_d.png", images_path + "/path_n.png", -9);
+        program, images_path + "/path_d.dds", images_path + "/path_n.dds", -9);
 
     std::cout << "Generuje geometrie drog..." << std::endl;
     RoadGeneratorVisitor generator(ssHighway, ssCity, ssPath);
