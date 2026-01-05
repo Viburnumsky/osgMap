@@ -67,6 +67,9 @@ int main(int argc, char** argv)
         "--device <device-name>", "add named device to the viewer");
     arguments.getApplicationUsage()->addCommandLineOption(
         "--stats", "print out load and compile timing stats");
+    arguments.getApplicationUsage()->addCommandLineOption(
+        "--max-tilt <degrees>", "Maximum camera tilt angle in degrees (0-90, default: 75)");
+
 
     ellipsoid = new osg::EllipsoidModel;
     viewer = new osgViewer::Viewer(arguments);
@@ -129,10 +132,19 @@ int main(int argc, char** argv)
 
     // set up the camera manipulators.
     {
+        // Read max tilt parameter from command line
+        double maxTilt = 75.0; // default value
+        arguments.read("--max-tilt", maxTilt);
+
         osg::ref_ptr<osgGA::KeySwitchMatrixManipulator> keyswitchManipulator =
             new osgGA::KeySwitchMatrixManipulator;
+        
+        // Create GoogleMapsManipulator and set max tilt
+        GoogleMapsManipulator* googleMapsManip = new GoogleMapsManipulator();
+        googleMapsManip->setMaxTiltDeg(maxTilt);
+        
         keyswitchManipulator->addMatrixManipulator('1', "GoogleMaps",
-                                                   new GoogleMapsManipulator());
+                                                   googleMapsManip);
         keyswitchManipulator->addMatrixManipulator(
             '2', "Trackball", new osgGA::TrackballManipulator());
         keyswitchManipulator->addMatrixManipulator(
