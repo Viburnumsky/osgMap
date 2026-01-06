@@ -17,30 +17,6 @@ namespace {
     }
 
     /**
-     * Computes the Earth radius from the bounding sphere of the scene node.
-     * 
-     * This function attempts to determine the Earth's radius by examining the bounding
-     * sphere of the provided scene node. If the node is valid and its radius exceeds
-     * a minimum threshold (indicating it represents a planetary body), that radius is used.
-     * Otherwise, a default Earth radius is returned.
-     * 
-     * @param node Observer pointer to the scene node (typically the Earth model)
-     * @return The computed or default Earth radius in meters
-     */
-    double getEarthRadius(const osg::observer_ptr<osg::Node>& node)
-    {
-        if (node.valid())
-        {
-            double r = node->getBound().radius();
-            // Only use the node's radius if it's large enough to represent a planet
-            if (r > kMinRadiusThreshold)
-                return r;
-        }
-        // Fall back to standard Earth radius (6371 km)
-        return kDefaultEarthRadius;
-    }
-
-    /**
      * Computes a local coordinate frame at a given point on a sphere.
      * 
      * This function establishes a right-handed coordinate system at the specified center
@@ -154,7 +130,11 @@ osg::Matrixd GoogleMapsManipulator::getInverseMatrix() const
     osg::Vec3d eye = _center + offset * _distance;
 
     // Ensure camera doesn't go below the surface
-    double earthRadius = getEarthRadius(_node);
+    // The "Earth Radius" is simply the distance from (0,0,0) to the city.
+    // If the node is invalid, default to standard Earth radius.
+    double earthRadius = (_node.valid())
+        ? _node->getBound().center().length()
+        : kDefaultEarthRadius;
     double minEyeDistance = earthRadius + kMinDistance;
 
     if (eye.length() < minEyeDistance)
@@ -211,8 +191,9 @@ void GoogleMapsManipulator::setByMatrix(const osg::Matrixd& matrix)
     double dot = std::clamp(lookVector * (-localUp), -1.0, 1.0);
     _tiltDeg = clampTilt(osg::RadiansToDegrees(std::acos(dot)), _maxTiltDeg);
 
-    // Get Earth radius for ray-sphere intersection calculation
-    double earthRadius = _node.valid() && _node->getBound().center().length() > kMinRadiusThreshold
+    // The "Earth Radius" is simply the distance from (0,0,0) to the city.
+    // If the node is invalid, default to standard Earth radius.
+    double earthRadius = (_node.valid())
         ? _node->getBound().center().length()
         : kDefaultEarthRadius;
 
