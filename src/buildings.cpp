@@ -14,7 +14,7 @@
 
 #include <osg/Geode>
 #include <osg/Geometry>
-
+#include <osg/FrontFace>
 #include <osg/CopyOp>
 #include <osgUtil/Tessellator>
 
@@ -34,7 +34,8 @@
 
 using namespace osg;
 
-static std::vector<osg::ref_ptr<osg::Texture2D>> g_roofTextures;
+namespace {
+std::vector<osg::ref_ptr<osg::StateSet>> g_roofTextures;
 
 class GeomVisitor : public osg::NodeVisitor {
 public:
@@ -56,7 +57,50 @@ private:
     osg::Geode* _firstGeode = nullptr;
 };
 
-static osg::ref_ptr<osg::Texture2D> loadRoofTexture(const std::string& texPath)
+const char* vertSource = R"(
+#version 420 compatibility
+
+out vec2 v_texCoord;
+out vec3 v_normal;
+out vec3 v_ecp;
+
+void main() {
+    v_texCoord = gl_MultiTexCoord0.xy;
+    v_ecp = vec3(gl_ModelViewMatrix * gl_Vertex);
+    v_normal = gl_Normal;
+    gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+}
+)";
+
+const char* fragSource = R"(
+#version 420 compatibility
+
+uniform sampler2D diffuseMap;
+
+in vec2 v_texCoord;
+in vec3 v_normal;
+in vec3 v_ecp;
+
+void main() {
+    vec4 texColor = texture2D(diffuseMap, v_texCoord);
+
+    vec3 N = normalize(gl_NormalMatrix * v_normal);
+    vec3 L = normalize(gl_LightSource[0].position.xyz);
+    vec3 V = normalize(-v_ecp);
+
+    float NdotL = max(dot(N, L), 0.0);
+    vec3 H = normalize(L + V);
+    float NdotH = max(dot(N, H), 0.0);
+
+    vec3 ambient  = gl_LightSource[0].ambient.rgb  * texColor.rgb * 0.3;
+    vec3 diffuse  = gl_LightSource[0].diffuse.rgb  * texColor.rgb * NdotL;
+    vec3 specular = gl_LightSource[0].specular.rgb * pow(NdotH, 32.0);
+
+    gl_FragColor = vec4(ambient + diffuse + specular, texColor.a);
+}
+)";
+
+osg::ref_ptr<osg::StateSet> loadRoofTexture(const std::string& texPath)
 {
     osg::ref_ptr<osg::Image> img = osgDB::readRefImageFile(texPath);
     if (!img.valid())
@@ -64,7 +108,6 @@ static osg::ref_ptr<osg::Texture2D> loadRoofTexture(const std::string& texPath)
         std::cout << "[ROOF] WARN: cannot load texture: " << texPath << "\n";
         return nullptr;
     }
-
     osg::ref_ptr<osg::Texture2D> tex = new osg::Texture2D(img.get());
     tex->setWrap(osg::Texture::WRAP_S, osg::Texture::REPEAT);
     tex->setWrap(osg::Texture::WRAP_T, osg::Texture::REPEAT);
@@ -72,8 +115,17 @@ static osg::ref_ptr<osg::Texture2D> loadRoofTexture(const std::string& texPath)
                    osg::Texture::LINEAR_MIPMAP_LINEAR);
     tex->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
     tex->setMaxAnisotropy(8.0f);
-
-    return tex;
+    tex->setUseHardwareMipMapGeneration(true);
+    osg::ref_ptr<osg::StateSet> pss = new osg::StateSet();
+    pss->setTextureAttributeAndModes(0, tex);
+    osg::Program* program = new osg::Program;
+    program->addShader(new osg::Shader(osg::Shader::VERTEX, vertSource));
+    program->addShader(new osg::Shader(osg::Shader::FRAGMENT, fragSource));
+    pss->setAttribute(program);
+    pss->addUniform(new osg::Uniform("diffuseMap", 0));
+    pss->setMode(GL_CULL_FACE, osg::StateAttribute::ON);
+    pss->setAttributeAndModes(new osg::FrontFace(osg::FrontFace::CLOCKWISE));
+    return pss;
 }
 
 
@@ -81,8 +133,8 @@ static osg::ref_ptr<osg::Texture2D> loadRoofTexture(const std::string& texPath)
    Extrusion (roof + walls)
    ============================================================ */
 
-static void extrude_simple(osg::Geode* geode, osg::Geometry* baseGeom,
-                           float hMeters, int roofIdx, float roofTile = 8.0f)
+void extrude_simple(osg::Geode* geode, osg::Geometry* baseGeom, float hMeters,
+                    int roofIdx, float roofTile = 8.0f)
 {
     if (!geode || !baseGeom || hMeters <= 0.f) return;
 
@@ -90,47 +142,10 @@ static void extrude_simple(osg::Geode* geode, osg::Geometry* baseGeom,
         dynamic_cast<osg::Vec3Array*>(baseGeom->getVertexArray());
     if (!v || v->size() < 3) return;
 
-    // Dach - wierzchołki
-    osg::ref_ptr<osg::Vec3Array> roofVerts = new osg::Vec3Array;
-    roofVerts->reserve(v->size());
-    for (unsigned i = 0; i < v->size(); ++i)
-    {
-        osg::Vec3 p = (*v)[i];
-        p.z() += hMeters;
-        roofVerts->push_back(p);
-    }
 
-    osg::ref_ptr<osg::Geometry> roof = new osg::Geometry;
-    roof->setVertexArray(roofVerts.get());
-
-
-    // Dach - topologia
-    if (baseGeom->getNumPrimitiveSets() > 0)
-    {
-        for (unsigned int ps = 0; ps < baseGeom->getNumPrimitiveSets(); ++ps)
-        {
-            osg::PrimitiveSet* src = baseGeom->getPrimitiveSet(ps);
-            if (!src) continue;
-
-            osg::ref_ptr<osg::Object> clonedObj =
-                src->clone(osg::CopyOp::DEEP_COPY_ALL);
-
-            osg::PrimitiveSet* clonedPS =
-                dynamic_cast<osg::PrimitiveSet*>(clonedObj.get());
-
-            if (clonedPS) roof->addPrimitiveSet(clonedPS);
-        }
-    }
-    else
-    {
-        roof->addPrimitiveSet(
-            new osg::DrawArrays(GL_POLYGON, 0, roofVerts->size()));
-
-        osgUtil::Tessellator tess;
-        tess.setTessellationType(osgUtil::Tessellator::TESS_TYPE_GEOMETRY);
-        tess.setWindingType(osgUtil::Tessellator::TESS_WINDING_ODD);
-        tess.retessellatePolygons(*roof);
-    }
+    osg::ref_ptr<osg::Vec3Array> roofVerts = v;
+    osg::ref_ptr<osg::Geometry> roof = baseGeom;
+    roof->dirtyDisplayList();
 
     // -----------------------
     // Dach - UV (planarne XY + tiling)
@@ -182,13 +197,16 @@ static void extrude_simple(osg::Geode* geode, osg::Geometry* baseGeom,
         osg::Vec3 t1 = b1;
         t1.z() += hMeters;
 
-        wallVerts->push_back(b0);
+        wallVerts->push_back(t1);
         wallVerts->push_back(b1);
+        wallVerts->push_back(b0);
+        wallVerts->push_back(t0);
         wallVerts->push_back(t1);
         wallVerts->push_back(b0);
-        wallVerts->push_back(t1);
-        wallVerts->push_back(t0);
     }
+
+    for (unsigned i = 0; i < v->size(); ++i)
+        (*v)[i].set((*v)[i][0], (*v)[i][1], (*v)[i][2] + hMeters);
 
     osg::ref_ptr<osg::Geometry> walls = new osg::Geometry;
     walls->setVertexArray(wallVerts.get());
@@ -214,27 +232,13 @@ static void extrude_simple(osg::Geode* geode, osg::Geometry* baseGeom,
     // StateSety
     // -----------------------
 
-    walls->setStateSet(baseGeom->getStateSet());
-
-    // Dach: losowy StateSet (tekstura) jeśli dostępny
     if (roofIdx >= 0 && roofIdx < (int)g_roofTextures.size()
         && g_roofTextures[roofIdx].valid())
     {
-        osg::ref_ptr<osg::StateSet> ss = new osg::StateSet;
-        ss->setTextureAttributeAndModes(0, g_roofTextures[roofIdx].get(),
-                                        osg::StateAttribute::ON);
-        ss->setMode(GL_LIGHTING, osg::StateAttribute::ON);
-        roof->setStateSet(ss.get());
+        roof->setStateSet(g_roofTextures[roofIdx]);
     }
-    else
-    {
-        roof->setStateSet(baseGeom->getStateSet());
-    }
-
-    geode->addDrawable(walls.get());
-    geode->addDrawable(roof.get());
-
-    geode->dirtyBound();
+    geode->addDrawable(walls);
+    geode->addDrawable(roof);
 }
 
 /* ============================================================
@@ -292,7 +296,7 @@ void parse_meta_data(osg::Node* model)
 
     unsigned K = std::min((unsigned)heights.size(), (unsigned)geoms.size());
     std::cout << "[INFO] Extruding buildings...\n";
-
+    geode->removeChildren(0, geode->getNumChildren());
 
     for (unsigned i = 0; i < K; ++i)
     {
@@ -326,6 +330,8 @@ void parse_meta_data(osg::Node* model)
     std::cout << "[INFO] Extrusion finished.\n";
 }
 
+}
+
 /* ============================================================
    process_buildings + cache
    ============================================================ */
@@ -335,8 +341,18 @@ osg::Node* process_buildings(osg::Matrixd& ltw, const std::string& file_path)
     const std::string buildings_file_path = file_path + "/buildings_levels.shp";
 
 
+    std::error_code ec;
+    uintmax_t fileSize = std::filesystem::file_size(buildings_file_path, ec);
+    if (ec)
+    {
+        std::cout << "Blad: Nie mozna odczytac rozmiaru pliku "
+                  << buildings_file_path << std::endl;
+        return nullptr;
+    }
+    std::string cacheFileName =
+        "buildings_" + std::to_string(fileSize) + ".osgb";
     const std::filesystem::path cachePath =
-        std::filesystem::current_path() / "buildings.osgb";
+        std::filesystem::current_path() / cacheFileName;
 
     // 1) Cache
     if (std::filesystem::exists(cachePath))
@@ -382,7 +398,7 @@ osg::Node* process_buildings(osg::Matrixd& ltw, const std::string& file_path)
     g_roofTextures.erase(
         std::remove_if(
             g_roofTextures.begin(), g_roofTextures.end(),
-            [](const osg::ref_ptr<osg::Texture2D>& t) { return !t.valid(); }),
+            [](const osg::ref_ptr<osg::StateSet>& t) { return !t.valid(); }),
         g_roofTextures.end());
 
     if (g_roofTextures.empty())
